@@ -1,0 +1,261 @@
+---
+title: "gwas"
+output: html_document
+---
+```{r}
+setwd("~/Documents/gwas/")
+```
+
+```{r, engine = 'bash', eval = FALSE}
+# download b values:
+
+wget http://www.phrap.org/software_dir/mcvicker_dir/bkgd.tar.gz
+tar -xvzf bkgd.tar.gz
+cd bkgd
+ls  *.bkgd | sort -n -k1.4 | xargs awk '{print substr(FILENAME, 4), $0}' > b.values.csv
+
+# download gwas effect size:
+wget https://www.ebi.ac.uk/gwas/api/search/downloads/full
+
+# download SDS
+wget http://pritchardlab.stanford.edu/UK10K-SDS-values.zip
+unzip UK10K-SDS-values.zip
+gzip -d SDS_UK10K_n3195_release_Sep_19_2016.tab.gz 
+```
+
+#Recombination rate vs GWAS
+
+Correlate recombination rates with GWAS effect size and P value.
+Plots are of log(effect size), but the actual correlations also have effect size vs recombination rate.
+
+The recombination rates come from the MareyMap package and are interpolated using loess. 
+```{r, warning=FALSE}
+library(data.table)
+library(MareyMap)
+# load associations, pick a disease
+assoc <- data.frame(fread("full"))
+assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
+assoc <- subset(assoc, CHR_ID != "X")
+assoc <- subset(assoc, CHR_ID != "")
+data("Homo_sapiens_mean")
+
+get_rate <- function(chromosome, position){
+    # note that chromosome should be a string and position should be an integer
+    
+    if (nchar(chromosome) == 1) { # make sure that "1" = "01"
+      chromosome = paste("0", chromosome, sep="")
+    }
+    a <- Homo_sapiens_mean[[paste("Chromosome ", chromosome, sep="")]]
+    a <- a+MMLoess()
+    return(query(a, pos=position))
+  }
+
+correlate_RR_trait <- function(trait){
+  LC <- subset(assoc, DISEASE.TRAIT == trait)
+  
+  for (i in 1:nrow(LC)) {
+    row <- LC[i,]
+    LC[i,"rec.rate"] <- get_rate(toString(row$CHR_ID), as.integer(row$CHR_POS))
+  }
+  
+  par(mfrow=c(1,2))
+  
+  plot(LC$rec.rate, log(LC$OR.or.BETA), pch=19, xlab="Recombination Rate (cM/Mb)", ylab="log SNP Effect size", main=trait)
+  abline(glm(log(LC$OR.or.BETA) ~ LC$rec.rate), col="red")
+     
+  plot(LC$rec.rate, LC$P.VALUE, pch=19, xlab="Recombination Rate (cM/Mb)", ylab="SNP P-value", main=trait)
+  abline(glm(LC$P.VALUE ~ LC$rec.rate), col="blue")
+  
+  print("-----------------------------")
+  print("log(Effect Size) correlation:")
+  print(summary(glm(log(LC$OR.or.BETA) ~ LC$rec.rate)))
+  print("-----------------------------")
+  print("Effect Size correlation:")
+  print(summary(glm(LC$OR.or.BETA ~ LC$rec.rate)))
+  print("-----------------------------")
+  print("P-value correlation:")
+  print(summary(glm(LC$P.VALUE ~ LC$rec.rate)))
+
+}
+
+correlate_RR_trait("Height")
+correlate_RR_trait("Lung cancer")
+correlate_RR_trait("LDL cholesterol")
+correlate_RR_trait("Triglycerides")
+correlate_RR_trait("Adiposity")
+
+# do it for all of them - but there are errors!
+# all.traits <- names(table(assoc$DISEASE.TRAIT))
+# try(lapply(all.traits, correlate_RR_trait))
+```
+
+
+# SDS and Rec. rate
+
+Get the outlier SDS (arbitrary >5 standard deviations from the mean) and correlate them with recombination rate.
+```{r sds_rec, warning=FALSE}
+library(data.table)
+library(MareyMap)
+data("Homo_sapiens_mean")
+
+get_rate_slide <- function(chromosome, position){
+    # note that chromosome should be a string and position should be an integer
+    
+    if (nchar(chromosome) == 1) { # make sure that "1" = "01"
+      chromosome = paste("0", chromosome, sep="")
+    }
+    a <- Homo_sapiens_mean[[paste("Chromosome ", chromosome, sep="")]]
+    a <- a+MMSlidingWindow()
+    return(query(a, pos=position))
+}
+
+get_rate_spline3 <- function(chromosome, position){
+    # note that chromosome should be a string and position should be an integer
+    
+    if (nchar(chromosome) == 1) { # make sure that "1" = "01"
+      chromosome = paste("0", chromosome, sep="")
+    }
+    a <- Homo_sapiens_mean[[paste("Chromosome ", chromosome, sep="")]]
+    a <- a+MMSpline3()
+    return(query(a, pos=position))
+}
+
+get_rate_loess <- function(chromosome, position){
+    # note that chromosome should be a string and position should be an integer
+    
+    if (nchar(chromosome) == 1) { # make sure that "1" = "01"
+      chromosome = paste("0", chromosome, sep="")
+    }
+    a <- Homo_sapiens_mean[[paste("Chromosome ", chromosome, sep="")]]
+    a <- a+MMLoess()
+    return(query(a, pos=position))
+}
+#load up SDS
+sds <- data.frame(fread("SDS_UK10K_n3195_release_Sep_19_2016.tab"))
+hist(sds$SDS, xlab="Genome wide SDS scores", main="All SDS values")
+abline(v=mean(sds$SDS)+(5*sd(sds$SDS)), col="red")
+sds.outlier <- subset(sds, SDS > (mean(sds$SDS)+(5*sd(sds$SDS))))
+# sds.insig <- subset(sds, SDS < 1)
+# sds.insig <- subset(sds.insig, SDS > -1)
+# sds.insig.chr22 <- subset(sds.insig, CHR == 22)
+
+## sliding window
+for (i in 1:nrow(sds.outlier)) {
+    row <- sds.outlier[i,]
+    sds.outlier[i,"rec.rate"] <- get_rate_slide(toString(row$CHR), as.integer(row$POS))
+}
+fit <- summary(glm(sds.outlier$SDS ~ sds.outlier$rec.rate))
+print(fit)
+plot(sds.outlier$rec.rate, sds.outlier$SDS, pch=19, xlab="Recombination rate (cM/Mb)", ylab="Outlier SDS", main="Sliding window estimate")
+abline(glm(sds.outlier$SDS ~ sds.outlier$rec.rate), col="red")
+
+## spline
+for (i in 1:nrow(sds.outlier)) {
+    row <- sds.outlier[i,]
+    sds.outlier[i,"rec.rate"] <- get_rate_spline3(toString(row$CHR), as.integer(row$POS))
+}
+fit <- summary(glm(sds.outlier$SDS ~ sds.outlier$rec.rate))
+print(fit)
+plot(sds.outlier$rec.rate, sds.outlier$SDS, pch=19, xlab="Recombination rate (cM/Mb)", ylab="Outlier SDS", main="Cubic spline interpolation")
+abline(glm(sds.outlier$SDS ~ sds.outlier$rec.rate), col="red")
+
+## loess
+for (i in 1:nrow(sds.outlier)) {
+    row <- sds.outlier[i,]
+    sds.outlier[i,"rec.rate"] <- get_rate_loess(toString(row$CHR), as.integer(row$POS))
+}
+fit <- summary(glm(sds.outlier$SDS ~ sds.outlier$rec.rate))
+print(fit)
+plot(sds.outlier$rec.rate, sds.outlier$SDS, pch=19, xlab="Recombination rate (cM/Mb)", ylab="Outlier SDS", main="Loess interpolation")
+abline(glm(sds.outlier$SDS ~ sds.outlier$rec.rate), col="red")
+
+# check non significant SDS
+# for (i in 1:nrow(sds.insig.chr22)) {
+#     row <- sds.insig.chr22[i,]
+#     sds.insig.chr22[i,"rec.rate"] <- get_rate_loess(toString(row$CHR), as.integer(row$POS))
+# }
+# fit <- summary(glm(sds.insig.chr22$SDS ~ sds.insig.chr22$rec.rate))
+# print(fit)
+# plot(sds.insig.chr22$rec.rate, sds.insig.chr22$SDS, pch=19, xlab="Recombination rate (cM/Mb)", ylab="Outlier SDS", main="Loess interpolation")
+# abline(glm(sds.insig.chr22$SDS ~ sds.insig.chr22$rec.rate), col="red")
+```
+
+
+
+---
+# garbage bin
+Code past here is old code for reference
+```{r}
+# library(data.table)
+# 
+# # load associations, pick a disease
+# assoc <- data.frame(fread("full"))
+# LC <- subset(assoc, DISEASE.TRAIT == "Lung cancer")
+# 
+# #load up B values
+# bvals <- fread("bkgd/b.values.csv")
+# bvals <- subset(bvals, V1 != "X.bkgd")
+# bvals$pos <- ave(bvals$V3, bvals$V1, FUN=cumsum)
+# bvals$V1 <- substr(bvals$V1,1,nchar(bvals$V1)-5)
+# names(bvals) <- c("chr", "bval", "range", "pos")
+# 
+# #load up SDS
+# sds <- data.frame(fread("SDS_UK10K_n3195_release_Sep_19_2016.tab"))
+# LC2 <- data.frame(LC$CHR_ID, LC$CHR_POS, LC$OR.or.BETA)
+# merge(LC2, sds, by.x = "LC.CHR_POS", by.y = "POS")
+
+```
+
+# SDS
+```{r}
+# library(data.table)
+# 
+# # load associations, pick a disease
+# assoc <- data.frame(fread("full"))
+# assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
+# 
+# #load up B values
+# bvals <- fread("bkgd/b.values.csv")
+# bvals <- subset(bvals, V1 != "X.bkgd")
+# bvals$pos <- ave(bvals$V3, bvals$V1, FUN=cumsum)
+# bvals$V1 <- substr(bvals$V1,1,nchar(bvals$V1)-5)
+# names(bvals) <- c("chr", "bval", "range", "pos")
+# 
+# #load up SDS
+# sds <- data.frame(fread("SDS_UK10K_n3195_release_Sep_19_2016.tab"))
+# sds$pos.label = paste(sds$CHR, sds$POS, sep="_")
+# 
+# a<-sds[sds$pos.label %in% assoc$pos.label,]
+# b<-assoc[assoc$pos.label %in% sds$pos.label,]
+# 
+# tab <- merge(a, b, by.x="pos.label", by.y = "pos.label")
+# 
+# # effect size vs sds
+# fit <- glm(tab$OR.or.BETA ~ tab$SDS)
+# plot(tab$SDS, tab$OR.or.BETA)
+# abline(fit)
+# #########
+# # pvalue vs sds
+# fit <- glm(tab$P.VALUE ~ tab$SDS)
+# plot(tab$SDS, tab$P.VALUE)
+# summary(fit)
+# abline(fit)
+```
+# B values
+```{r}
+# library(data.table)
+# 
+# # load associations, pick a disease
+# assoc <- data.frame(fread("full"))
+# assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
+# LC <- subset(assoc, DISEASE.TRAIT == "Lung cancer")
+# 
+# 
+# #load up B values
+# bvals <- fread("bkgd/b.values.csv")
+# bvals <- subset(bvals, V1 != "X.bkgd")
+# bvals$pos <- ave(bvals$V3, bvals$V1, FUN=cumsum)
+# bvals$V1 <- substr(bvals$V1,1,nchar(bvals$V1)-5)
+# names(bvals) <- c("chr", "bval", "range", "pos")
+
+```
