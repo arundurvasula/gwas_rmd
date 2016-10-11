@@ -6,6 +6,8 @@ output: html_document
 setwd("~/Documents/gwas/")
 ```
 
+# Download data for use
+
 ```{r, engine = 'bash', eval = FALSE}
 # download b values:
 
@@ -17,6 +19,8 @@ ls  *.bkgd | sort -n -k1.4 | xargs awk '{print substr(FILENAME, 4), $0}' > b.val
 # download gwas effect size:
 wget https://www.ebi.ac.uk/gwas/api/search/downloads/full
 ```
+
+# set up correlations
 
 ```{r, warning=FALSE}
 library(data.table)
@@ -30,85 +34,199 @@ assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
 assoc <- completeFun(assoc, c("CHR_ID", "CHR_POS", "OR.or.BETA"))
 assoc <- subset(assoc, CHR_ID != "7")
 
-
 #load up B values
 bvals <- data.frame(fread("bkgd/b.values.csv"))
 bvals <- subset(bvals, V1 != "X.bkgd")
 bvals$V1 <- as.integer(substr(bvals$V1,1,nchar(bvals$V1)-5))
-
-final = data.frame()
-
-for (i in 1:22) {
-  bval.t <- subset(bvals, V1 == i)
-  bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
-  assoc.t <- subset(assoc, as.integer(CHR_ID) == i)
-  try(assoc.t$bval <- bval.t[findInterval(as.integer(assoc.t$CHR_POS), bval.t$pos),]$V2)
-  try(final <- rbind(final, assoc.t)) # chromosome 7 gives me issues
-}
-
-final3 <- subset(final, RISK.ALLELE.FREQUENCY > 0.01 & RISK.ALLELE.FREQUENCY < 1 & OR.or.BETA < 50)
-
-plot(final3$bval, final3$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main="Unbinned correlation")
-summary(fit<-glm(final3$OR.or.BETA~final3$bval))
-cor.test(final3$bval,final3$OR.or.BETA, method="s")
-abline(fit, col="red")
-
-effect.binned <- tapply(final3$OR.or.BETA, cut(final3$bval, seq(0, 1000, by=5)), mean)
-bval.binned <- seq(0, 999, by=5)/1000
-plot(bval.binned, effect.binned, pch=19, ylab="Effect size", xlab="B Value", main="Binned correlation")
-lines(lowess(bval.binned, effect.binned), col="red")
+hist(bvals$V2, main="Genome wide B values", xlab="B value")
 ```
 
-# Neutral control
-```{r}
-control = data.frame()
+# Neutral control on Chr22
+
+Find neutral regions on Chromsome 22 and check 1) that they look neutral in terms of BGS and 2) that they match the BGS values from Neutral Region Extractor
+
+- need to convert neutral regions (hg19) to hg18 before comparing
+
+```{r, warning=FALSE}
+library(rtracklayer)
+
 con.assoc <- fread("neutral_chr22.tsv")
+g.con.assoc <- makeGRangesFromDataFrame(con.assoc)
+download.file("http://hgdownload.cse.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg18.over.chain.gz", "hg19ToHg18.over.chain.gz")
+system("gunzip hg19ToHg18.over.chain.gz")
+g.con.18 <- liftOver(g.con.assoc, import.chain("hg19ToHg18.over.chain"))
+con.18 <- data.frame(g.con.18)
 
 bval.t <- subset(bvals, V1 == 22)
 bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
 
-bval.t[findInterval(con.assoc$chromStart, bval.t$pos),]$V2
-for (i in 1:length(con.assoc)){
-  a <- seq(con.assoc[1,]$chromStart, con.assoc[1,]$chromEnd)
-  b <- bval.t[findInterval(a, bval.t$pos),]$V2
-  print(b)
+neutral.b <- integer()
+
+for (i in 1:nrow(con.18)){
+  a <- seq(con.18[i,]$start, con.18[i,]$end)
+  b <- mean(bval.t[findInterval(a, bval.t$pos),]$V2)
+  neutral.b <- c(neutral.b, b)
+}
+par(mfrow=c(1,2))
+hist(neutral.b, main="Neutral B value distribution on Chr22", xlab="Neutral B value")
+hist(con.assoc$st.bkgd*1000, main="Neutral B values from NRE (control)", xlab="Neutral B value")
+dev.off()
+```
+
+# Convert GWAS to hg18
+```{r}
+download.file("http://hgdownload.cse.ucsc.edu/goldenPath/hg38/liftOver/hg38ToHg19.over.chain.gz", "hg38ToHg19.over.chain.gz")
+system("gunzip hg38ToHg19.over.chain.gz")
+
+assoc.locs <- data.frame(paste("chr",as.integer(assoc$CHR_ID),sep=""), as.integer(assoc$CHR_POS), as.integer(assoc$CHR_POS))
+names(assoc.locs)<-c("chrom", "chromStart", "chromEnd")
+assoc.locs <- na.omit(assoc.locs)
+al.g <- makeGRangesFromDataFrame(assoc.locs)
+al.g <- sort(al.g)
+al.g.19 <- liftOver(al.g, import.chain("hg38ToHg19.over.chain"))
+al.g.18 <- liftOver(unlist(al.g.19), import.chain("hg19ToHg18.over.chain"))
+al <- data.frame(al.g.18)
+
+gwas.bvals <- integer()
+for (i in c(1:6,9:20)) {
+  bval.t <- subset(bvals, V1 == i)
+  bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+  al.t <- subset(al, seqnames == paste("chr",i, sep=""))
+  al.t$bval <- bval.t[findInterval(al.t$start, bval.t$pos),]$V2
+  gwas.bvals <- c(gwas.bvals, al.t$bval)
+}
+hist(gwas.bvals, main="GWAS hit B value distribution", xlab="GWAS hit B value")
+```
+
+# Check specific traits
+```{r}
+trait.hist <- function(trait){
+  as2 <- subset(assoc, DISEASE.TRAIT==trait)
+  assoc.locs <- data.frame(paste("chr",as.integer(as2$CHR_ID),sep=""), as.integer(as2$CHR_POS), as.integer(as2$CHR_POS))
+  names(assoc.locs)<-c("chrom", "chromStart", "chromEnd")
+  assoc.locs <- na.omit(assoc.locs)
+  al.g <- makeGRangesFromDataFrame(assoc.locs)
+  al.g <- sort(al.g)
+  al.g.19 <- liftOver(al.g, import.chain("hg38ToHg19.over.chain"))
+  al.g.18 <- liftOver(unlist(al.g.19), import.chain("hg19ToHg18.over.chain"))
+  al <- data.frame(al.g.18)
+  
+  gwas.bvals <- integer()
+  for (i in c(1:6,9:20)) {
+    bval.t <- subset(bvals, V1 == i)
+    bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+    al.t <- subset(al, seqnames == paste("chr",i, sep=""))
+    al.t$bval <- bval.t[findInterval(al.t$start, bval.t$pos),]$V2
+    gwas.bvals <- c(gwas.bvals, al.t$bval)
+  }
+  hist(gwas.bvals, main=trait, xlab="GWAS hit B value")
+}
+```
+```{r, warning=FALSE}
+trait.hist("Type 2 diabetes")
+trait.hist("Prostate cancer")
+trait.hist("Rheumatoid arthritis")
+trait.hist("Blood metabolite levels")
+trait.hist("Multiple sclerosis")
+trait.hist("QT interval")
+trait.hist("Trans fatty acid levels")
+trait.hist("Blood pressure")
+trait.hist("Age-related macular degeneration")
+trait.hist("Bone mineral density")
+trait.hist("Coronary heart disease")
+```
+
+
+# check other features
+```{r}
+other.hist <- function(as2){
+  assoc.locs <- data.frame(paste("chr",as.integer(as2$CHR_ID),sep=""), as.integer(as2$CHR_POS), as.integer(as2$CHR_POS))
+  names(assoc.locs)<-c("chrom", "chromStart", "chromEnd")
+  assoc.locs <- na.omit(assoc.locs)
+  al.g <- makeGRangesFromDataFrame(assoc.locs)
+  al.g <- sort(al.g)
+  al.g.19 <- liftOver(al.g, import.chain("hg38ToHg19.over.chain"))
+  al.g.18 <- liftOver(unlist(al.g.19), import.chain("hg19ToHg18.over.chain"))
+  al <- data.frame(al.g.18)
+  
+  gwas.bvals <- integer()
+  for (i in c(1:6,9:20)) {
+    bval.t <- subset(bvals, V1 == i)
+    bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+    al.t <- subset(al, seqnames == paste("chr",i, sep=""))
+    al.t$bval <- bval.t[findInterval(al.t$start, bval.t$pos),]$V2
+    gwas.bvals <- c(gwas.bvals, al.t$bval)
+  }
+  hist(gwas.bvals, main="", xlab="GWAS hit B value")
 }
 
+as2 <- subset(assoc, X95..CI..TEXT. == "unit decrease")
+other.hist(as2)
 ```
+
+---
+#bin
+
+# check overall correlation
+
+```{r}
+# final = data.frame()
+# 
+# for (i in 1:22) {
+#   bval.t <- subset(bvals, V1 == i)
+#   bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+#   assoc.t <- subset(assoc, as.integer(CHR_ID) == i)
+#   try(assoc.t$bval <- bval.t[findInterval(as.integer(assoc.t$CHR_POS), bval.t$pos),]$V2)
+#   try(final <- rbind(final, assoc.t)) # chromosome 7 gives me issues
+# }
+# 
+# final3 <- subset(final, RISK.ALLELE.FREQUENCY > 0.01 & RISK.ALLELE.FREQUENCY < 1 & OR.or.BETA < 50)
+# 
+# plot(final3$bval, final3$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main="Unbinned correlation")
+# summary(fit<-glm(final3$OR.or.BETA~final3$bval))
+# cor.test(final3$bval,final3$OR.or.BETA, method="s")
+# abline(fit, col="red")
+# 
+# effect.binned <- tapply(final3$OR.or.BETA, cut(final3$bval, seq(0, 1000, by=5)), mean)
+# bval.binned <- seq(0, 999, by=5)/1000
+# plot(bval.binned, effect.binned, pch=19, ylab="Effect size", xlab="B Value", main="Binned correlation")
+# lines(lowess(bval.binned, effect.binned), col="red")
+```
+
 # Check specific traits
 ```{r, warning=FALSE}
-  check.trait <- function(trait) {
-    final4 <- subset(final3, DISEASE.TRAIT==trait)
-    fit<-glm(final4$OR.or.BETA~final4$bval)
-    plot(final4$bval, final4$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main=trait)
-    lines(lowess(final4$bval, final4$OR.or.BETA), col="red")
-    abline(fit, col="blue")
-    print(cor.test(final4$bval,final4$OR.or.BETA, method="s"))
-    print(summary(fit))
-    
-  }
+  # check.trait <- function(trait) {
+  #   final4 <- subset(final3, DISEASE.TRAIT==trait)
+  #   fit<-glm(final4$OR.or.BETA~final4$bval)
+  #   plot(final4$bval, final4$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main=trait)
+  #   lines(lowess(final4$bval, final4$OR.or.BETA), col="red")
+  #   abline(fit, col="blue")
+  #   print(cor.test(final4$bval,final4$OR.or.BETA, method="s"))
+  #   print(summary(fit))
+  #   
+  # }
 ```
 
 # Positive rho traits
 
 checked top 40 traits, sorted by # loci found
 ```{r, warning=FALSE}
-check.trait("Type 2 diabetes")
-check.trait("Prostate cancer")
-check.trait("Rheumatoid arthritis")
-check.trait("Blood metabolite levels")
-check.trait("Multiple sclerosis")
-check.trait("QT interval")
-check.trait("Trans fatty acid levels")
-check.trait("Blood pressure")
-check.trait("Age-related macular degeneration")
-check.trait("Bone mineral density")
-check.trait("Coronary heart disease")
+# check.trait("Type 2 diabetes")
+# check.trait("Prostate cancer")
+# check.trait("Rheumatoid arthritis")
+# check.trait("Blood metabolite levels")
+# check.trait("Multiple sclerosis")
+# check.trait("QT interval")
+# check.trait("Trans fatty acid levels")
+# check.trait("Blood pressure")
+# check.trait("Age-related macular degeneration")
+# check.trait("Bone mineral density")
+# check.trait("Coronary heart disease")
 
 ```
 
 # Negative rho
 ```{r, warning=FALSE}
-check.trait("Parkinson's disease")
-check.trait("IgG glycosylation")
+# check.trait("Parkinson's disease")
+# check.trait("IgG glycosylation")
 ```

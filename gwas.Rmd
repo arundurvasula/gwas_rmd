@@ -37,6 +37,7 @@ assoc <- data.frame(fread("full"))
 assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
 assoc <- subset(assoc, CHR_ID != "X")
 assoc <- subset(assoc, CHR_ID != "")
+assoc <- assoc[!is.na(as.numeric(as.character(assoc$CHR_ID))),]
 data("Homo_sapiens_mean")
 
 get_rate <- function(chromosome, position){
@@ -83,10 +84,12 @@ correlate_RR_trait("Lung cancer")
 correlate_RR_trait("LDL cholesterol")
 correlate_RR_trait("Triglycerides")
 correlate_RR_trait("Adiposity")
+correlate_RR_trait("Body mass index")
+correlate_RR_trait("Central corneal thickness")
 
 # do it for all of them - but there are errors!
-# all.traits <- names(table(assoc$DISEASE.TRAIT))
-# try(lapply(all.traits, correlate_RR_trait))
+all.traits <- names(table(assoc$DISEASE.TRAIT))
+lapply(all.traits, correlate_RR_trait)
 ```
 
 
