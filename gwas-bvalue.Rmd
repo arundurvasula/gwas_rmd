@@ -1,0 +1,73 @@
+---
+title: "gwas-bvalue"
+output: html_document
+---
+```{r}
+setwd("~/Documents/gwas/")
+```
+
+```{r, engine = 'bash', eval = FALSE}
+# download b values:
+
+wget http://www.phrap.org/software_dir/mcvicker_dir/bkgd.tar.gz
+tar -xvzf bkgd.tar.gz
+cd bkgd
+ls  *.bkgd | sort -n -k1.4 | xargs awk '{print substr(FILENAME, 4), $0}' > b.values.csv
+
+# download gwas effect size:
+wget https://www.ebi.ac.uk/gwas/api/search/downloads/full
+```
+
+```{r, warning=FALSE}
+library(data.table)
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+# load associations, pick a disease
+assoc <- data.frame(fread("full"))
+assoc$pos.label = paste(assoc$CHR_ID, assoc$CHR_POS, sep="_")
+assoc <- completeFun(assoc, c("CHR_ID", "CHR_POS", "OR.or.BETA"))
+assoc <- subset(assoc, CHR_ID != "7")
+
+
+#load up B values
+bvals <- data.frame(fread("bkgd/b.values.csv"))
+bvals <- subset(bvals, V1 != "X.bkgd")
+bvals$V1 <- as.integer(substr(bvals$V1,1,nchar(bvals$V1)-5))
+
+final = data.frame()
+
+for (i in 1:22) {
+  bval.t <- subset(bvals, V1 == i)
+  bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+  assoc.t <- subset(assoc, as.integer(CHR_ID) == i)
+  try(assoc.t$bval <- bval.t[findInterval(as.integer(assoc.t$CHR_POS), bval.t$pos),]$V2)
+  try(final <- rbind(final, assoc.t)) # chromosome 7 gives me issues
+}
+
+final3 <- subset(final, RISK.ALLELE.FREQUENCY > 0.01 & RISK.ALLELE.FREQUENCY < 1 & OR.or.BETA < 50)
+
+plot(final3$bval, final3$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main="Unbinned correlation")
+summary(fit<-glm(final3$OR.or.BETA~final3$bval))
+cor.test(final3$bval,final3$OR.or.BETA, method="s")
+abline(fit, col="red")
+
+effect.binned <- tapply(final3$OR.or.BETA, cut(final3$bval, seq(0, 1000, by=5)), mean)
+bval.binned <- seq(0, 999, by=5)/1000
+plot(bval.binned, effect.binned, pch=19, ylab="Effect size", xlab="B Value", main="Binned correlation")
+lines(lowess(bval.binned, effect.binned), col="red")
+```
+
+# check specific traits
+```{r, warning=FALSE}
+final4 <- subset(final3, DISEASE.TRAIT=="Type 2 diabetes")
+cor.test(final4$bval,final4$OR.or.BETA, method="s")
+
+final4 <- subset(final3, DISEASE.TRAIT=="Prostate cancer")
+cor.test(final4$bval,final4$OR.or.BETA, method="s")
+
+final4 <- subset(final3, DISEASE.TRAIT=="Parkinson's disease")
+cor.test(final4$bval,final4$OR.or.BETA, method="s")
+
+```
