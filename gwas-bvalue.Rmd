@@ -59,6 +59,22 @@ plot(bval.binned, effect.binned, pch=19, ylab="Effect size", xlab="B Value", mai
 lines(lowess(bval.binned, effect.binned), col="red")
 ```
 
+# Neutral control
+```{r}
+control = data.frame()
+con.assoc <- fread("neutral_chr22.tsv")
+
+bval.t <- subset(bvals, V1 == 22)
+bval.t$pos <- ave(bval.t$V3, bval.t$V1, FUN=cumsum)
+
+bval.t[findInterval(con.assoc$chromStart, bval.t$pos),]$V2
+for (i in 1:length(con.assoc)){
+  a <- seq(con.assoc[1,]$chromStart, con.assoc[1,]$chromEnd)
+  b <- bval.t[findInterval(a, bval.t$pos),]$V2
+  print(b)
+}
+
+```
 # Check specific traits
 ```{r, warning=FALSE}
   check.trait <- function(trait) {
