@@ -59,15 +59,40 @@ plot(bval.binned, effect.binned, pch=19, ylab="Effect size", xlab="B Value", mai
 lines(lowess(bval.binned, effect.binned), col="red")
 ```
 
-# check specific traits
+# Check specific traits
 ```{r, warning=FALSE}
-final4 <- subset(final3, DISEASE.TRAIT=="Type 2 diabetes")
-cor.test(final4$bval,final4$OR.or.BETA, method="s")
+  check.trait <- function(trait) {
+    final4 <- subset(final3, DISEASE.TRAIT==trait)
+    fit<-glm(final4$OR.or.BETA~final4$bval)
+    plot(final4$bval, final4$OR.or.BETA, pch=19, ylab="Effect size", xlab="B Value", main=trait)
+    lines(lowess(final4$bval, final4$OR.or.BETA), col="red")
+    abline(fit, col="blue")
+    print(cor.test(final4$bval,final4$OR.or.BETA, method="s"))
+    print(summary(fit))
+    
+  }
+```
 
-final4 <- subset(final3, DISEASE.TRAIT=="Prostate cancer")
-cor.test(final4$bval,final4$OR.or.BETA, method="s")
+# Positive rho traits
 
-final4 <- subset(final3, DISEASE.TRAIT=="Parkinson's disease")
-cor.test(final4$bval,final4$OR.or.BETA, method="s")
+checked top 40 traits, sorted by # loci found
+```{r, warning=FALSE}
+check.trait("Type 2 diabetes")
+check.trait("Prostate cancer")
+check.trait("Rheumatoid arthritis")
+check.trait("Blood metabolite levels")
+check.trait("Multiple sclerosis")
+check.trait("QT interval")
+check.trait("Trans fatty acid levels")
+check.trait("Blood pressure")
+check.trait("Age-related macular degeneration")
+check.trait("Bone mineral density")
+check.trait("Coronary heart disease")
 
+```
+
+# Negative rho
+```{r, warning=FALSE}
+check.trait("Parkinson's disease")
+check.trait("IgG glycosylation")
 ```
